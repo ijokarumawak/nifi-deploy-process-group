@@ -2,7 +2,7 @@
 
 This project supports deploying new Process Group into your **LIVE** NiFi data-flow.
 
-Befor:
+Before:
 ![flow-before](https://raw.githubusercontent.com/ijokarumawak/nifi-deploy-process-group/master/images/flow-before.png)
 
 After executing deploy.js:
@@ -15,8 +15,10 @@ After executing deploy.js:
 
 ## How it works
 
+Unchecked items are planned to be added:
+
 - [ ] Import template
-- [x] Find ProcessGroup by name
+- [ ] Find ProcessGroup by name
 - [x] Get upstream connections
 - [x] Stop upstream processors
 - [ ] Wait until downstream connections get empty (or empty the queue forcefully?)
