@@ -1,0 +1,8 @@
+{
+  "name": "nifi-deploy-process-group",
+  "version": "0.0.1",
+  "dependencies": {
+    "request": "*",
+    "js-yaml": "*"
+  }
+}

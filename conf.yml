@@ -1,0 +1,7 @@
+nifi:
+  api:
+    plain: 'http://localhost:8080/nifi-api'
+    secure:
+  certFile:
+  secure: false
+
