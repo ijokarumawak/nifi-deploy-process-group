@@ -26,8 +26,63 @@ function NiFiApi(conf) {
 
     if (this.cert) o.ca = fs.readFileSync(this.cert);
 
-    request(o, callback);
+    return request(o, callback);
   }
+}
+
+var uploadTemplate = function(nifiApi, pgId, filepath, callback) {
+  var req = nifiApi.request({
+    url: '/process-groups/' + pgId + '/templates/upload',
+    method: 'POST'
+  }, (err, res, body) => {
+    if (err) {
+      callback(err);
+      return;
+    }
+    if(debug) console.log(res.statusCode);
+    switch (res.statusCode) {
+      case 201:
+        var match = /templates\/(.*)/.exec(res.headers.location);
+        return callback(null, match[1]);
+      case 200:
+        // NiFi returns error message.
+        return callback(res.body);
+      default:
+        return callback(res);
+    }
+  });
+
+  var form = req.form();
+  form.append('template', fs.createReadStream(filepath));
+}
+
+// http://localhost:8080/nifi-api/process-groups/b6a09099-0157-1000-9aa8-fcccef6172ac/template-instance
+/*
+{"templateId":"7323f263-59e2-4026-9c93-15d1f3179fa3","originX":1155.5883353676245,"originY":373.2468505218974}
+*/
+
+var instanciateTemplate = function(nifiApi, pgId, templateId, callback) {
+  nifiApi.request({
+    url: '/process-groups/' + pgId + '/template-instance',
+    method: 'POST',
+    json: {
+      templateId: templateId,
+      originX: 0,
+      originY: 0
+    }
+  }, (err, res, body) => {
+    if (err) {
+      callback(err);
+      return;
+    }
+    if(debug) console.log(res.statusCode);
+    switch (res.statusCode) {
+      case 201:
+        return callback(null, body.flow.processGroups[0].id);
+      default:
+        return callback(res);
+    }
+  });
 }
 
 var searchComponent = function(nifiApi, name, callback) {
@@ -46,15 +101,28 @@ var searchComponent = function(nifiApi, name, callback) {
 }
 
 var updateProcessGroupState = function(nifiApi, uuid, running, callback) {
+  getProcessGroupFlow(nifiApi, uuid, (err, pg) => {
+    if (err) {
+      callback(err);
+      return;
+    }
+    putProcessGroupFlow(nifiApi, uuid, {
+      id: uuid,
+      state: running ? "RUNNING" : "STOPPED"
+    }, (err) => {
+      callback(err);
+    })
+  });
+}
+
+var moveProcessGroup = function(nifiApi, uuid, mover, callback) {
   getProcessGroup(nifiApi, uuid, (err, pg) => {
     if (err) {
       callback(err);
       return;
     }
-    putProcessGroup(nifiApi, uuid, {
-      id: uuid,
-      state: running ? "RUNNING" : "STOPPED"
-    }, (err) => {
+    mover(pg.component.position);
+    putProcessGroup(nifiApi, uuid, pg, (err) => {
       callback(err);
     })
   });
@@ -97,8 +165,13 @@ var getProcessor = function(nifiApi, uuid, callback) {
 }
 
 var getProcessGroup = function(nifiApi, uuid, callback) {
+  getComponent(nifiApi, '/process-groups/' + uuid, callback);
+}
+
+var getProcessGroupFlow = function(nifiApi, uuid, callback) {
   getComponent(nifiApi, '/flow/process-groups/' + uuid, callback);
 }
+
 
 var postComponent = function(nifiApi, path, component, callback) {
   nifiApi.request({
@@ -112,8 +185,7 @@ var postComponent = function(nifiApi, path, component, callback) {
     }
     if(debug) console.log(res.statusCode);
     if (res.statusCode == 201) {
-      // TODO: pass the created location.
-      callback(null);
+      callback(null, res.headers.location);
     } else {
       callback(res);
     }
@@ -140,6 +212,10 @@ var putComponent = function(nifiApi, path, component, callback) {
 }
 
 var putProcessGroup = function(nifiApi, uuid, pg, callback) {
+  putComponent(nifiApi, '/process-groups/' + uuid, pg, callback);
+}
+
+var putProcessGroupFlow = function(nifiApi, uuid, pg, callback) {
   putComponent(nifiApi, '/flow/process-groups/' + uuid, pg, callback);
 }
 
@@ -149,6 +225,29 @@ var putProcessor = function(nifiApi, uuid, processor, callback) {
 
 var putConnection = function(nifiApi, conn, callback) {
   putComponent(nifiApi, '/connections/' + conn.component.id, conn, callback);
+}
+
+var deleteComponent = function(nifiApi, path, revision, callback) {
+  var qs = {
+    version: revision.version,
+    clientId: revision.clientId
+  };
+  nifiApi.request({
+    url: path,
+    method: 'DELETE',
+    qs: qs
+  }, (err, res, body) => {
+    if (err) {
+      callback(err);
+      return;
+    }
+    if(debug) console.log(res.statusCode);
+    if (res.statusCode == 200) {
+      callback(null);
+    } else {
+      callback(res);
+    }
+  });
 }
 
 var findInputPortIdByName = function(nifiApi, portName, targetPgId, callback) {
@@ -236,17 +335,17 @@ var collectComponents = function(nifiApi, ctx, callback) {
   if (!ctx.targetPgId) return callback(new Error('targetPgId is not set in context.'));
 
   // Start with parent process group.
-  getProcessGroup(nifiApi, ctx.parentPgId, (err, parentPg) => {
+  getProcessGroupFlow(nifiApi, ctx.parentPgId, (err, parentPg) => {
     if (err) return callback(new Error('Failed to get parent processor group: ' + err));
     ctx.parentPg = parentPg;
   
-    getProcessGroup(nifiApi, ctx.currentPgId, (err, currentPg) => {
+    getProcessGroupFlow(nifiApi, ctx.currentPgId, (err, currentPg) => {
       if (err) return callback(new Error('Failed to get current processor group: ' + err));  
       ctx.currentPg = currentPg;
 
       if (debug) console.log('Current pg', currentPg);
   
-      getProcessGroup(nifiApi, ctx.targetPgId, (err, targetPg) => {
+      getProcessGroupFlow(nifiApi, ctx.targetPgId, (err, targetPg) => {
         if (err) return callback(new Error('Failed to get target processor group: ' + err));  
         ctx.targetPg = targetPg;
 
@@ -358,6 +457,38 @@ var createDestConnections = function(nifiApi, ctx, callback) {
   });
 }
 
+var deploy = function(callback) {
+  collectComponents(nifiApi, ctx, (err) => {
+    if (err) return callback(err);
+    console.log(ctx.currentPg);
+  
+    // TODO: check components in ctx.
+    // TODO: support dry-run.
+    // Stop upstream processors.
+    updateSourceProcessorsState(nifiApi, ctx, false, (err) => {
+      if (err) return callback(err);
+  
+      switchSourceConnections(nifiApi, ctx, (err) => {
+        if (err) return callback(err);
+  
+        createDestConnections(nifiApi, ctx, (err) => {
+          if (err) return callback(err);
+  
+          updateProcessGroupState(nifiApi, ctx.targetPgId, true, (err) => {
+            if (err) return callback(err);
+  
+            // Start upstream processors.
+            updateSourceProcessorsState(nifiApi, ctx, true, (err) => {
+              if (err) return callback(err);
+              callback(null);
+            });
+          });
+        });
+      });
+    });
+  });
+}
+
 var conf;
 try {
   conf = yaml.safeLoad(fs.readFileSync('conf.yml'));
@@ -377,7 +508,9 @@ var ctx = {
   srcConns: new Array(),
   dstConns: new Array(),
   tgtInputPortIds: {},
-  tgtOutputPortIds: {}
+  tgtOutputPortIds: {},
+  templateFilePath: null,
+  templateId: null
 };
 
 var nifiApi = new NiFiApi(conf.nifi);
@@ -404,35 +537,59 @@ var nifiApi = new NiFiApi(conf.nifi);
     });
 */
 
-ctx.parentPgId = process.argv[2];
-ctx.currentPgId = process.argv[3];
-ctx.targetPgId = process.argv[4];
+var cmd = process.argv[2];
+ctx.parentPgId = process.argv[3];
+ctx.currentPgId = process.argv[4];
+// ctx.targetPgId = process.argv[5];
+ctx.templateFilePath = process.argv[5];
 
-collectComponents(nifiApi, ctx, (err) => {
-  if (err) return console.log('Failed to collect components.', err);
-  console.log(ctx.currentPg);
+if (!ctx.templateFilePath) return console.log('template file path is not set in context');
+uploadTemplate(nifiApi, ctx.parentPgId, ctx.templateFilePath, (err, templateId) => {
+  if (err) return console.log('Failed to upload template', err);
+  ctx.templateId = templateId;
+  console.log('Template is uploaded', templateId);
 
-  // TODO: check components in ctx.
-  // TODO: support dry-run.
-  // Stop upstream processors.
-  updateSourceProcessorsState(nifiApi, ctx, false, (err) => {
-    if (err) return console.log('Failed to stop source processors.', err);
+  if (!ctx.templateId) return console.log('template id path is not set in context');
+  instanciateTemplate(nifiApi, ctx.parentPgId, ctx.templateId, (err, targetPgId) => {
+    if (err) return console.log('Failed to instanciate template', err);
+    ctx.targetPgId = targetPgId;
+    console.log('Template is initiated', targetPgId);
 
-    switchSourceConnections(nifiApi, ctx, (err) => {
-      if (err) return console.log('Failed to switch source connection.', err);
+    var orgX = 0;
+    var orgY = 0;
+    moveProcessGroup(nifiApi, ctx.currentPgId, (pos) => {
+      orgX = pos.x;
+      orgY = pos.y;
+      pos.x -= 400;
+    }, (err) => {
+      if (err) return console.log('Failed to move', ctx.currentPgId, err);
 
-      createDestConnections(nifiApi, ctx, (err) => {
-        if (err) return console.log('Failed to create destination connection.', err);
+      moveProcessGroup(nifiApi, ctx.targetPgId, (pos) => {
+        pos.x += orgX;
+        pos.y += orgY;
+      }, (err) => {
+        if (err) return console.log('Failed to move', ctx.targetPgId, err);
 
-        updateProcessGroupState(nifiApi, ctx.targetPgId, true, (err) => {
-          if (err) return console.log('Failed to start target process group.', err);
+        deploy((err) => {
+          if (err) return console.log('Failed to deploy', err);
 
-          // Start upstream processors.
-          updateSourceProcessorsState(nifiApi, ctx, true, (err) => {
-            if (err) return console.log('Failed to start source processors.', err);
+          updateProcessGroupState(nifiApi, ctx.currentPgId, false, (err) => {
+            if (err) return console.log('Failed to stop current process group', err);
+
+            // TODO: stop destination processors.
+
+            // Delete downstream connections.
+            ctx.dstConns.forEach((conn) => {
+              console.log('####', conn);
+              deleteComponent(nifiApi, '/connections/' + conn.id, conn.revision, (err) => {
+                if (err) return console.log('Failed to delete conn', err);
+              });
+            });
           });
+
         });
       });
     });
+
   });
 });

@@ -12,6 +12,7 @@ After executing deploy.js:
 ## Restrictions
 
 - Current and target Process Groups must have the identical set of input and output ports
+- In a template file, template.name and snippet.processGroups.name should be the same, and follow a naming convention, `<name>:<version>`
 
 ## How it works
 
@@ -46,8 +47,10 @@ $ vi config.yml
 
 # Execute
 $ node deploy.js <parentProcessGroupId> <currentProcessGroupId> <targetProcessGroupId>
+$ node deploy.js <parentProcessGroupId> <currentProcessGroupId> <templateFilePath>
 # E.g.
 $ node deploy.js b6a09099-0157-1000-9aa8-fcccef6172ac b7a9cc48-0157-1000-f70f-a7e32aad4bdb b7d14852-0157-1000-0285-d7ee38fb573a
+$ node deploy.js b6a09099-0157-1000-9aa8-fcccef6172ac b7a9cc48-0157-1000-f70f-a7e32aad4bdb template.xml
 
 
 ```
